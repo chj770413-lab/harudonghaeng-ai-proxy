@@ -1,10 +1,8 @@
 import { OpenAI } from "openai";
-import formidable from "formidable";
-import fs from "fs";
 
 export const config = {
   api: {
-    bodyParser: false, // 파일 업로드 위해 비활성화
+    bodyParser: false, // 파일을 raw 데이터로 받기 위해 필요
   },
 };
 
@@ -13,25 +11,28 @@ const openai = new OpenAI({
 });
 
 export default async function handler(req, res) {
-  const form = new formidable.IncomingForm();
+  try {
+    // 1) Raw binary 음성 데이터를 직접 buffer로 수집
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
 
-  form.parse(req, async (err, fields, files) => {
-    if (err || !files.audio) {
-      return res.status(400).json({ error: "파일 업로드 실패" });
-    }
+    req.on("end", async () => {
+      const audioBuffer = Buffer.concat(chunks);
 
-    try {
-      const audioFile = fs.readFileSync(files.audio.filepath);
-
-      const response = await openai.audio.transcriptions.create({
-        file: audioFile,
+      // 2) OpenAI Whisper로 직접 buffer 전송
+      const result = await openai.audio.transcriptions.create({
+        file: {
+          buffer: audioBuffer,
+          filename: "audio.webm",
+          contentType: "audio/webm",
+        },
         model: "gpt-4o-mini-tts",
       });
 
-      res.status(200).json({ text: response.text });
-    } catch (error) {
-      console.error("Whisper 오류:", error);
-      res.status(500).json({ error: "Whisper 처리 실패" });
-    }
-  });
+      res.status(200).json({ text: result.text });
+    });
+  } catch (err) {
+    console.error("Whisper API Error:", err);
+    res.status(500).json({ error: "Whisper processing failed" });
+  }
 }
