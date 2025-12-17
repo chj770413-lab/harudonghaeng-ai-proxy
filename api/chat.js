@@ -19,14 +19,7 @@ function sendResponse(res, status, body) {
 }
 
 // ----------------------------
-// 메모리 (A단계: 직전 질문 1개)
-// ⚠️ MVP용 임시 메모리 (서버 재시작 시 초기화됨)
-// ----------------------------
-let lastUserMessage = null;
-let lastAssistantMessage = null;
-
-// ----------------------------
-// 메인 핸들러
+// 메인 핸들러 (무상태)
 // ----------------------------
 export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
@@ -40,7 +33,8 @@ export default async function handler(req, res) {
     return sendResponse(res, 405, { error: "POST 요청만 허용됩니다." });
   }
 
-  const { message } = req.body || {};
+  // 👇 lastMessage를 함께 받음 (A단계 핵심)
+  const { message, lastMessage } = req.body || {};
   if (!message) {
     return sendResponse(res, 400, { error: "message 파라미터가 없습니다." });
   }
@@ -66,21 +60,18 @@ export default async function handler(req, res) {
 `;
 
     // ----------------------------
-    // 메시지 구성 (A단계 메모리)
+    // 메시지 구성 (A단계: 직전 질문 1개)
     // ----------------------------
     const messages = [
       { role: "system", content: systemPrompt },
     ];
 
-    // 직전 대화가 있으면 추가
-    if (lastUserMessage && lastAssistantMessage) {
-      messages.push(
-        { role: "user", content: lastUserMessage },
-        { role: "assistant", content: lastAssistantMessage }
-      );
+    // 👇 직전 질문이 있으면 추가
+    if (lastMessage) {
+      messages.push({ role: "user", content: lastMessage });
     }
 
-    // 현재 사용자 메시지
+    // 현재 질문
     messages.push({ role: "user", content: message });
 
     // ----------------------------
@@ -111,12 +102,6 @@ export default async function handler(req, res) {
     const reply =
       data.choices?.[0]?.message?.content ||
       "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
-
-    // ----------------------------
-    // 메모리 업데이트 (A단계)
-    // ----------------------------
-    lastUserMessage = message;
-    lastAssistantMessage = reply;
 
     return sendResponse(res, 200, { reply });
   } catch (err) {
