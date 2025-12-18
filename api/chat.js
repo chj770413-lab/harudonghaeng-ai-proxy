@@ -244,28 +244,13 @@ const systemPrompt = `
 
 
 
-    // ----------------------------
-    // 메시지 구성 (A단계: 직전 질문 1개)
-    // ----------------------------
-    const messages = [
-      { role: "system", content: systemPrompt },
-    ];
-
-    // 👇 직전 질문이 있으면 추가
-    if (lastMessage) {
-      messages.push({ role: "user", content: lastMessage });
-    }
-
-    // 현재 질문
-    messages.push({ role: "user", content: message });
-
-    // ----------------------------
+   // ----------------------------
 // OpenAI 호출
 // ----------------------------
 const clientMessages = Array.isArray(req.body.messages)
   ? req.body.messages
   : [];
-// ⭐ 1. messages를 여기서 새로 정의합니다 (가장 중요)
+
 const messages = [
   {
     role: "system",
@@ -284,9 +269,7 @@ const messages = [
 - 질문을 회피하지 말고, 안전한 범위 내에서 반드시 응답합니다
 `
   },
-
-  // ⭐ 2. 기존에 쓰던 사용자 대화 이어붙이기
-  ...req.body.messages
+  ...clientMessages   // ⭐ 여기만 바뀜
 ];
 
 const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -298,7 +281,7 @@ const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
   body: JSON.stringify({
     model: "gpt-4o-mini",
     temperature: 0.4,
-    max_tokens: 300, // ⭐ 이것도 꼭 추가
+    max_tokens: 300,
     messages,
   }),
 });
@@ -317,10 +300,3 @@ const reply =
   "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
 
 return sendResponse(res, 200, { reply });
-
-} catch (err) {
-return sendResponse(res, 500, {
-  error: "서버 오류",
-  details: err.toString(),
-});
-}
