@@ -260,39 +260,65 @@ const systemPrompt = `
     messages.push({ role: "user", content: message });
 
     // ----------------------------
-    // OpenAI 호출
-    // ----------------------------
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.4,
-        messages,
-      }),
-    });
+// OpenAI 호출
+// ----------------------------
 
-    const data = await openaiRes.json();
+// ⭐ 1. messages를 여기서 새로 정의합니다 (가장 중요)
+const messages = [
+  {
+    role: "system",
+    content: `
+당신은 '하루동행' 시니어 건강 도우미입니다.
+당신은 간호사 역할을 합니다.
 
-    if (!openaiRes.ok) {
-      return sendResponse(res, 500, {
-        error: "OpenAI API 오류",
-        details: data,
-      });
-    }
+- 단정하지 않습니다
+- 불안을 키우지 않습니다
+- 의료적 진단이나 확정적인 판단을 하지 않습니다
+- 사용자의 말을 먼저 요약하고 공감합니다
+- 현재 정보로 설명 가능한 범위까지만 안내합니다
+- "잠시 후", "나중에", "답변할 수 없다"는 표현을 사용하지 않습니다
+- 답변은 반드시 2~3문장으로 합니다
+- 답변 마지막에 질문은 반드시 1개만 합니다
+- 질문을 회피하지 말고, 안전한 범위 내에서 반드시 응답합니다
+`
+  },
 
-    const reply =
-      data.choices?.[0]?.message?.content ||
-      "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
+  // ⭐ 2. 기존에 쓰던 사용자 대화 이어붙이기
+  ...req.body.messages
+];
 
-    return sendResponse(res, 200, { reply });
-  } catch (err) {
-    return sendResponse(res, 500, {
-      error: "서버 오류",
-      details: err.toString(),
-    });
-  }
+const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  },
+  body: JSON.stringify({
+    model: "gpt-4o-mini",
+    temperature: 0.4,
+    max_tokens: 300, // ⭐ 이것도 꼭 추가
+    messages,
+  }),
+});
+
+const data = await openaiRes.json();
+
+if (!openaiRes.ok) {
+  return sendResponse(res, 500, {
+    error: "OpenAI API 오류",
+    details: data,
+  });
+}
+
+const reply =
+  data.choices?.[0]?.message?.content ||
+  "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
+
+return sendResponse(res, 200, { reply });
+
+} catch (err) {
+return sendResponse(res, 500, {
+  error: "서버 오류",
+  details: err.toString(),
+});
 }
