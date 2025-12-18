@@ -21,7 +21,8 @@ function sendResponse(res, status, body) {
 // ----------------------------
 // 메인 핸들러 (무상태)
 // ----------------------------
-module.exports = asyncㅡㅐasyncㅡㅐasyncㅡasyncㅡfunct) {
+module.exports = async function handler(req, res) {
+
   if (req.method === "OPTIONS") {
     for (const key in CORS_HEADERS) {
       res.setHeader(key, CORS_HEADERS[key]);
