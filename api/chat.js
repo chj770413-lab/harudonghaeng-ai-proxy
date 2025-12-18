@@ -44,7 +44,7 @@ module.exports = asyncㅡㅐasyncㅡㅐasyncㅡasyncㅡfunct) {
     return sendResponse(res, 500, { error: "OPENAI_API_KEY가 없습니다." });
   }
 
-  try {
+  
    // ----------------------------
 // 하루동행 SYSTEM PROMPT
 // ----------------------------
