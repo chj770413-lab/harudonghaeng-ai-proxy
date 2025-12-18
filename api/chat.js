@@ -249,14 +249,18 @@ try {
   // OpenAI 호출
   // ----------------------------
 
-  const clientMessages = Array.isArray(req.body.messages)
-    ? req.body.messages
-    : [];
+ const fetch = require("node-fetch");
 
-  const messages = [
-    {
-      role: "system",
-      content: `
+module.exports = async function handler(req, res) {
+  try {
+    const clientMessages = Array.isArray(req.body.messages)
+      ? req.body.messages
+      : [];
+
+    const messages = [
+      {
+        role: "system",
+        content: `
 당신은 '하루동행' 시니어 건강 도우미입니다.
 당신은 간호사 역할을 합니다.
 
@@ -265,57 +269,44 @@ try {
 - 의료적 진단이나 확정적인 판단을 하지 않습니다
 - 사용자의 말을 먼저 요약하고 공감합니다
 - 현재 정보로 설명 가능한 범위까지만 안내합니다
-- "잠시 후", "나중에", "답변할 수 없다"는 표현을 사용하지 않습니다
-- 답변은 반드시 2~3문장으로 합니다
-- 답변 마지막에 질문은 반드시 1개만 합니다
-- 질문을 회피하지 말고, 안전한 범위 내에서 반드시 응답합니다
+- 답변은 2~3문장으로 합니다
+- 마지막에 질문은 1개만 합니다
 `
-    },
-    ...clientMessages
-  ];
+      },
+      ...clientMessages
+    ];
 
-  // ✅ DEBUG 로그 (꼭 필요)
-  console.log("DEBUG:", {
-    hasApiKey: !!apiKey,
-    messagesLength: messages.length,
-    firstRole: messages[0]?.role,
-  });
+    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.4,
+        max_tokens: 300,
+        messages,
+      }),
+    });
 
-  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.4,
-      max_tokens: 300,
-      messages,
-    }),
-  });
+    const data = await openaiRes.json();
 
-  const data = await openaiRes.json();
+    if (!openaiRes.ok) {
+      return res.status(500).json(data);
+    }
 
-  if (!openaiRes.ok) {
-    console.error("OPENAI ERROR:", data);
-    return sendResponse(res, 500, {
-      error: "OpenAI API 오류",
-      details: data,
+    return res.status(200).json({
+      reply: data.choices?.[0]?.message?.content || ""
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      error: err.toString(),
     });
   }
-
-  const reply =
-    data.choices?.[0]?.message?.content ||
-    "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
-
-  return sendResponse(res, 200, { reply });
-
-} catch (err) {
-  console.error("SERVER ERROR:", err);
-  return sendResponse(res, 500, {
-    error: "서버 오류",
-    details: err.toString(),
-  });
-}
+};
+ 
+   
+  
 
