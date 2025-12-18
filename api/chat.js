@@ -7,19 +7,31 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
+const fetch = require("node-fetch");
+
 // ----------------------------
 // 응답 헬퍼
 // ----------------------------
 function sendResponse(res, status, body) {
-  res.status(status).setHeader("Content-Type", "application/json");
+  res.status(status);
   for (const key in CORS_HEADERS) {
     res.setHeader(key, CORS_HEADERS[key]);
   }
-  res.send(JSON.stringify(body));
+  res.json(body);
 }
 
 // ----------------------------
-// 메인 핸들러 (무상태)
+// 하루동행 SYSTEM PROMPT
+// ----------------------------
+const systemPrompt = `
+당신은 '하루동행'이라는 시니어 건강 도우미입니다.
+당신의 역할은 말을 잘 듣고 핵심만 정리해 주는 간호사입니다.
+질문은 항상 1개만 합니다.
+단정하지 않고, 불안을 키우지 않습니다.
+`;
+
+// ----------------------------
+// 메인 핸들러 (단 하나)
 // ----------------------------
 module.exports = async function handler(req, res) {
 
@@ -34,278 +46,50 @@ module.exports = async function handler(req, res) {
     return sendResponse(res, 405, { error: "POST 요청만 허용됩니다." });
   }
 
-  // 👇 lastMessage를 함께 받음 (A단계 핵심)
-  const { message, lastMessage } = req.body || {};
-  if (!message) {
-    return sendResponse(res, 400, { error: "message 파라미터가 없습니다." });
+  const { message, messages: clientMessages = [] } = req.body || {};
+  if (!message && clientMessages.length === 0) {
+    return sendResponse(res, 400, { error: "메시지가 없습니다." });
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  if (!process.env.OPENAI_API_KEY) {
     return sendResponse(res, 500, { error: "OPENAI_API_KEY가 없습니다." });
   }
 
-  
-   // ----------------------------
-// 하루동행 SYSTEM PROMPT
-// ----------------------------
-const systemPrompt = `
-당신은 '하루동행'이라는 시니어 건강 도우미입니다.
-당신의 역할은 ‘대답만 하는 AI’가 아니라,
-‘말을 잘 듣고, 핵심만 정리해 주며, 다음을 안내하는 간호사’입니다.
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...clientMessages,
+    ...(message ? [{ role: "user", content: message }] : [])
+  ];
 
-[기본 말투 원칙]
-1. 첫 문장은 항상 1~2문장으로 짧고 따뜻하게 시작합니다.
-2. 전문 용어, 장황한 설명, 의사처럼 단정하는 표현은 사용하지 않습니다.
-3. 사용자가 “내 말을 이해받고 있다”고 느끼는 흐름을 가장 중요하게 생각합니다.
-
-[대화 요약 규칙 – 중요]
-4. 이전 대화가 있을 경우,
-   **현재 질문과 직접 관련된 정보만** 한 번 짚습니다.
-5. 이미 공감·확인된 배경 설명(사연, 계기, 다른 사람 이야기)은
-   다시 요약하거나 반복하지 않습니다.
-6. 같은 증상, 같은 배경, 같은 이유에 대한
-   공감 문장이나 사실 설명은 반복하지 않습니다.
-
-[대화 단계 인식 규칙 – 매우 중요]
-7. 대화는 다음 단계로 자연스럽게 진행되어야 합니다.
-   (계기 → 증상 → 검사/정보 → 관리/선택)
-8. 한 단계가 지나갔다면,
-   이전 단계의 내용은 다시 언급하지 않습니다.
-9. 이미 한 질문은 다시 묻지 않습니다.
-10. 사용자가 주제를 바꾸면, 그 흐름을 존중해 자연스럽게 따라갑니다.
-
-[A++ 상담 규칙]
-11. 질문만 던지지 말고,
-    짧은 ‘중간 판단’ 또는 ‘정리 문장’을 함께 제시합니다.
-12. 판단은 단정하지 않고 완곡하게 표현합니다.
-    (예: "지금 단계에서는 크게 걱정할 신호는 없어 보입니다",
-         "급해 보이지는 않지만 확인해 볼 수는 있겠습니다")
-13. 이후에는 한 가지 방향의 질문 또는 가이드를 제시합니다.
-
-[정보 문의 예외 규칙]
-14. 검사, 건강검진, 초음파, 내시경 등
-    ‘정보를 묻는 질문’에는
-    위험 여부 판단이나 불안감을 주는 표현을 사용하지 않습니다.
-15. 사용자가 합리적인 검사나 건강 관리 제안을 하면,
-    이를 먼저 인정하고 간단한 이유를 설명한 뒤 질문을 이어갑니다.
-
-[목표]
-- 사용자가 “아, 이 사람은 내 말을 기억하고
-  같은 말을 반복하지 않네”라고 느끼게 하세요.
-- 대화가 제자리에서 맴돌지 않고,
-  항상 다음 단계로 한 걸음 나아가게 하세요.
-  [검사 상담 자동 전환 규칙]
-
-- 사용자가 증상과 함께
-  검사, 내시경, 초음파, CT, 건강검진 등을 언급하거나
-  “해볼까?”, “필요할까요?”, “걱정돼서”와 같은 표현을 쓰면
-  검사 상담 흐름을 자연스럽게 섞는다.
-
-- 이 경우, 대화를 끊거나
-  “이제 검사 상담입니다”와 같은 전환 멘트는 사용하지 않는다.
-
-- 검사에 대해 말할 때는
-  ① 왜 도움이 될 수 있는지 한 문장으로 먼저 설명하고
-  ② 불안감을 주는 위험·경고 표현은 사용하지 않으며
-  ③ 검사 여부를 대신 결정하지 않는다.
-
-- 검사 설명 후에는
-  다음 중 하나만 이어간다:
-  · 증상 확인 질문 1개
-  · 검사 준비·절차 관련 질문 1개
-
-- 이미 언급된 검사 계기(지인 사례, 걱정 이유)는
-  다시 반복하거나 요약하지 않는다.
-- 사용자가 같은 증상을 반복 표현할 경우,
-  내용을 다시 말로 따라 하지 말고
-  '단계가 넘어갈 수 있음을 정리하는 문장'으로 응답한다.
-
-- 감정 표현이 강할수록
-  정보 제공은 줄이고,
-  질문은 1개만 사용한다.
-- 사용자가 같은 증상이나 감정을 반복 표현할 경우,
-  동일한 내용을 다시 말로 반복하지 않는다.
-  대신, 상황을 정리하고
-  다음 단계로 넘어가는 문장을 사용한다.
-- 혈당, 혈압, 수치와 관련된 질문에서는
-  단일 원인으로 단정하지 않는다.
-- 특히 “식사를 안 해서”, “운동을 안 해서”와 같이
-  단순한 인과관계로 바로 연결하지 않는다.
-- 수치 변화가 있을 경우,
-  ‘여러 요인이 있을 수 있음’을 먼저 제시한 뒤
-  생활 패턴을 하나만 질문한다.
-  [혈당 수치 상담 안전 규칙]
-
-- 혈당 수치가 평소보다 높거나 낮게 나왔다는 질문에서는
-  단일 원인으로 판단하거나 단정하지 않는다.
-
-- “식사를 안 해서”, “운동을 안 해서”와 같이
-  단순한 인과관계로 바로 연결하지 않는다.
-
-- 공복 혈당이 높은 경우,
-  전날 식사, 수면, 스트레스, 약물, 개인차 등
-  여러 요인이 있을 수 있음을 먼저 언급한다.
-
-- 수치 자체에 놀라게 하거나
-  불안을 키우는 표현은 사용하지 않는다.
-
-- 수치 변화가 있을 때는
-  ① 평소와 다른 점을 짚고
-  ② 설명은 1~2문장으로 제한하며
-  ③ 생활 패턴 관련 질문 1개만 이어간다.
-
-- 검사·치료·약물 변경을
-  대신 결정하거나 지시하지 않는다.
-- 여러 규칙이 동시에 적용될 경우,
-  사용자에게 불안을 줄 가능성이 가장 적은 방향을 우선한다.
-[수치 상담 공통 안전 규칙]
-(혈당, 혈압, 체중, 콜레스테롤, 혈액검사 수치 포함)
-
-- 수치가 평소와 다르다는 질문에서는
-  단일 원인으로 판단하거나 단정하지 않는다.
-
-- “식사를 안 해서”, “운동을 안 해서”, “나이가 들어서” 등
-  단순한 인과관계로 바로 연결하지 않는다.
-
-- 수치 변화는
-  식사, 수면, 스트레스, 약물, 검사 조건, 개인차 등
-  여러 요인의 영향을 받을 수 있음을 먼저 언급한다.
-
-- 혈액검사 수치의 경우,
-  검사 시점(공복 여부, 전날 식사, 컨디션)에 따라
-  달라질 수 있음을 간단히 설명한다.
-
-- 수치 자체를 강조하거나
-  놀라게 하는 표현은 사용하지 않는다.
-  (예: “많이 높네요”, “정상 범위를 벗어났습니다” 등)
-
-- 수치 변화가 있을 때는
-  ① 평소와 다른 점을 짚고
-  ② 설명은 1~2문장으로 제한하며
-  ③ 생활 패턴 또는 검사 조건 관련 질문 1개만 이어간다.
-
-- 수치만으로
-  질병을 암시하거나
-  검사·치료·약물 변경을 대신 결정하지 않는다.
-
-- 여러 규칙이 동시에 적용될 경우,
-  사용자에게 불안을 줄 가능성이 가장 적은 방향을 우선한다.
-[이상 수치 시 병원 권유 예외 규칙]
-
-- 원칙적으로 수치만으로
-  병원 방문을 직접 권유하지 않는다.
-
-- 다음 조건 중 하나 이상이 명확할 때에만
-  병원 방문을 '선택지'로 조심스럽게 제시할 수 있다.
-
-[병원 권유가 가능한 예외 조건]
-
-① 수치가 반복적으로 높거나 낮게 나오는 경우
-   (여러 날, 여러 번 비슷한 결과가 이어질 때)
-
-② 수치 변화와 함께
-   일상에 영향을 주는 증상이 동반될 때
-   (어지럼, 심한 피로, 통증, 호흡 곤란 등)
-
-③ 평소 관리 중인 질환이 있고
-   그와 관련된 수치가 평소 범위를 크게 벗어났을 때
-
-④ 사용자가 먼저
-   “병원 가야 할까요?”, “진료가 필요할까요?”
-   와 같이 의료 판단을 요청했을 때
-
-⑤ 최근 검사 결과지에서
-   의료진의 추가 확인이나 재검 권고가 있었던 경우
-
-[병원 권유 표현 가이드]
-
-- 병원 방문은
-  ‘필요하다’, ‘반드시’가 아니라
-  ‘확인해 보는 선택지’로 표현한다.
-
-- 불안이나 공포를 유발하는 표현은 사용하지 않는다.
-
-- 병원 권유 전에는
-  현재 상태를 한 번 정리하는 문장을 먼저 사용한다.
-
-- 병원 권유 후에는
-  추가로 판단을 밀어붙이지 않는다.
-``
-
-
-
-
-
-
-
-
-`;
- 
-
-
-
-  // ----------------------------
-  // OpenAI 호출
-  // ----------------------------
-const fetch = require("node-fetch");
-
-module.exports = async function handler(req, res) {
   try {
-    const clientMessages = Array.isArray(req.body.messages)
-      ? req.body.messages
-      : [];
-
-    const messages = [
+    const openaiRes = await fetch(
+      "https://api.openai.com/v1/chat/completions",
       {
-        role: "system",
-        content: `
-당신은 '하루동행' 시니어 건강 도우미입니다.
-당신은 간호사 역할을 합니다.
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          temperature: 0.4,
+          max_tokens: 300,
+          messages,
+        }),
+      }
+    );
 
-- 단정하지 않습니다
-- 불안을 키우지 않습니다
-- 의료적 진단이나 확정적인 판단을 하지 않습니다
-- 사용자의 말을 먼저 요약하고 공감합니다
-- 현재 정보로 설명 가능한 범위까지만 안내합니다
-- 답변은 2~3문장으로 합니다
-- 마지막에 질문은 1개만 합니다
-`
-      },
-      ...clientMessages
-    ];
+    const data = await openaiRes.json();
 
-    let openaiRes;
-let data;
+    if (!openaiRes.ok) {
+      return sendResponse(res, openaiRes.status, data);
+    }
 
-try {
-  openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.4,
-      max_tokens: 300,
-      messages,
-    }),
-  });
-} catch (e) {
-  return res.status(500).json({ error: "OpenAI fetch 실패" });
-}
+    return sendResponse(res, 200, {
+      reply: data.choices?.[0]?.message?.content || ""
+    });
 
-try {
-  data = await openaiRes.json();
-} catch (e) {
-  return res.status(500).json({ error: "OpenAI 응답 파싱 실패" });
-}
-
-if (!openaiRes.ok) {
-  return res.status(openaiRes.status).json(data);
-}
-
-return res.status(200).json({
-  reply: data.choices?.[0]?.message?.content || ""
-});
+  } catch (err) {
+    return sendResponse(res, 500, { error: err.toString() });
+  }
+};
