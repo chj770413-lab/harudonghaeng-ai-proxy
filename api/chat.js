@@ -274,40 +274,37 @@ module.exports = async function handler(req, res) {
       ...clientMessages
     ];
 
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.4,
-        max_tokens: 300,
-        messages,
-      }),
-    });
+    let openaiRes;
+let data;
 
-    const data = await openaiRes.json();
+try {
+  openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.4,
+      max_tokens: 300,
+      messages,
+    }),
+  });
+} catch (e) {
+  return res.status(500).json({ error: "OpenAI fetch 실패" });
+}
 
-    if (!openaiRes.ok) {
-      return res.status(500).json(data);
-    }
+try {
+  data = await openaiRes.json();
+} catch (e) {
+  return res.status(500).json({ error: "OpenAI 응답 파싱 실패" });
+}
 
-    return res.status(200).json({
-      reply: data.choices?.[0]?.message?.content || ""
-    });
+if (!openaiRes.ok) {
+  return res.status(openaiRes.status).json(data);
+}
 
-  } catch (err) {
-    return res.status(500).json({
-      error: err.toString(),
-    });
-  }
-};
-
- 
-
- 
-   
-  
-
+return res.status(200).json({
+  reply: data.choices?.[0]?.message?.content || ""
+});
