@@ -244,17 +244,19 @@ const systemPrompt = `
 
 
 
-   // ----------------------------
-// OpenAI 호출
-// ----------------------------
-const clientMessages = Array.isArray(req.body.messages)
-  ? req.body.messages
-  : [];
+try {
+  // ----------------------------
+  // OpenAI 호출
+  // ----------------------------
 
-const messages = [
-  {
-    role: "system",
-    content: `
+  const clientMessages = Array.isArray(req.body.messages)
+    ? req.body.messages
+    : [];
+
+  const messages = [
+    {
+      role: "system",
+      content: `
 당신은 '하루동행' 시니어 건강 도우미입니다.
 당신은 간호사 역할을 합니다.
 
@@ -268,35 +270,52 @@ const messages = [
 - 답변 마지막에 질문은 반드시 1개만 합니다
 - 질문을 회피하지 말고, 안전한 범위 내에서 반드시 응답합니다
 `
-  },
-  ...clientMessages   // ⭐ 여기만 바뀜
-];
+    },
+    ...clientMessages
+  ];
 
-const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  },
-  body: JSON.stringify({
-    model: "gpt-4o-mini",
-    temperature: 0.4,
-    max_tokens: 300,
-    messages,
-  }),
-});
+  // ✅ DEBUG 로그 (꼭 필요)
+  console.log("DEBUG:", {
+    hasApiKey: !!apiKey,
+    messagesLength: messages.length,
+    firstRole: messages[0]?.role,
+  });
 
-const data = await openaiRes.json();
+  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.4,
+      max_tokens: 300,
+      messages,
+    }),
+  });
 
-if (!openaiRes.ok) {
+  const data = await openaiRes.json();
+
+  if (!openaiRes.ok) {
+    console.error("OPENAI ERROR:", data);
+    return sendResponse(res, 500, {
+      error: "OpenAI API 오류",
+      details: data,
+    });
+  }
+
+  const reply =
+    data.choices?.[0]?.message?.content ||
+    "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
+
+  return sendResponse(res, 200, { reply });
+
+} catch (err) {
+  console.error("SERVER ERROR:", err);
   return sendResponse(res, 500, {
-    error: "OpenAI API 오류",
-    details: data,
+    error: "서버 오류",
+    details: err.toString(),
   });
 }
 
-const reply =
-  data.choices?.[0]?.message?.content ||
-  "말씀해 주셔서 감사합니다. 조금 더 알려주실 수 있을까요?";
-
-return sendResponse(res, 200, { reply });
