@@ -248,8 +248,7 @@ try {
   // ----------------------------
   // OpenAI 호출
   // ----------------------------
-
- const fetch = require("node-fetch");
+const fetch = require("node-fetch");
 
 module.exports = async function handler(req, res) {
   try {
@@ -306,6 +305,9 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
+ 
+
  
    
   
