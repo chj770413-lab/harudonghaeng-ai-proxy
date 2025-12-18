@@ -262,7 +262,9 @@ const systemPrompt = `
     // ----------------------------
 // OpenAI 호출
 // ----------------------------
-
+const clientMessages = Array.isArray(req.body.messages)
+  ? req.body.messages
+  : [];
 // ⭐ 1. messages를 여기서 새로 정의합니다 (가장 중요)
 const messages = [
   {
