@@ -7,8 +7,6 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const fetch = require("node-fetch");
-
 // ----------------------------
 // 응답 헬퍼
 // ----------------------------
@@ -26,8 +24,9 @@ function sendResponse(res, status, body) {
 const systemPrompt = `
 당신은 '하루동행'이라는 시니어 건강 도우미입니다.
 당신의 역할은 말을 잘 듣고 핵심만 정리해 주는 간호사입니다.
-질문은 항상 1개만 합니다.
-단정하지 않고, 불안을 키우지 않습니다.
+단정하지 않고, 불안을 키우지 않으며,
+항상 2~3문장으로 응답하고
+마지막에는 질문을 1개만 합니다.
 `;
 
 // ----------------------------
@@ -47,6 +46,7 @@ module.exports = async function handler(req, res) {
   }
 
   const { message, messages: clientMessages = [] } = req.body || {};
+
   if (!message && clientMessages.length === 0) {
     return sendResponse(res, 400, { error: "메시지가 없습니다." });
   }
@@ -90,6 +90,8 @@ module.exports = async function handler(req, res) {
     });
 
   } catch (err) {
-    return sendResponse(res, 500, { error: err.toString() });
+    return sendResponse(res, 500, {
+      error: err.message || "서버 오류"
+    });
   }
 };
