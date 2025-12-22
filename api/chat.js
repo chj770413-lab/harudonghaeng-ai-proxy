@@ -142,18 +142,26 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 긍정(맞아/네/예) → 여기서만 LLM 설명 호출
-    if (isPositiveConfirm(text)) {
-      const confirmed = Number.isFinite(heardNumber) ? Number(heardNumber) : null;
+   // 1-1) 확인 완료 ("맞아" 등)
+// 🚫 이 단계에서는 LLM을 절대 호출하지 않는다
+if (isPositiveConfirm(text)) {
+  const confirmed = Number.isFinite(heardNumber) ? Number(heardNumber) : null;
 
-      // 숫자 없으면 절대 설명으로 못 넘어감
-      if (!confirmed) {
-        return sendResponse(res, 200, {
-          reply: "숫자를 한 번만 다시 말씀해 주실 수 있을까요?",
-          needConfirm: true,
-          heardNumber: null,
-        });
-      }
+  if (!confirmed) {
+    return sendResponse(res, 200, {
+      reply: "숫자를 한 번만 다시 말씀해 주실 수 있을까요?",
+    });
+  }
+
+  // ✅ 고정 응답 (LLM 미사용)
+  return sendResponse(res, 200, {
+    reply:
+      `알겠습니다.\n` +
+      `${confirmed}이라는 수치를 기준으로 말씀드릴게요.\n` +
+      `한 번의 측정만으로 판단하기보다는, 최근 흐름을 함께 보는 게 도움이 될 수 있어요.`,
+  });
+}
+
 
       const messages = [
         { role: "system", content: systemPrompt },
