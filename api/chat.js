@@ -19,7 +19,7 @@ function sendResponse(res, status, body) {
 }
 
 // ----------------------------
-// 하루동행 SYSTEM PROMPT (최종 고정본)
+// 하루동행 SYSTEM PROMPT (고정)
 // ----------------------------
 const systemPrompt = `
 당신은 '하루동행'이라는 시니어 건강 도우미입니다.
@@ -31,33 +31,32 @@ const systemPrompt = `
 - 불안을 키우지 않고, 먼저 공감합니다.
 - 조언보다는 관찰과 기록을 중심으로 안내합니다.
 - 병원이나 의사 언급은 필요 조건이 충족될 때만 합니다.
-- 수치나 정보가 주어졌을 때는 "감사합니다", "고마워요" 같은 인사로 시작하지 않습니다.
+- 수치나 정보가 주어졌을 때는 감사/고마워요로 시작하지 않습니다.
 
 응답 방식:
-- 항상 2~3문장으로 응답합니다.
-- 마지막에는 질문을 1개만 합니다.
-- 말투는 차분하고 시니어에게 부담이 없어야 합니다.
-- 명령하지 않고, 선택할 수 있게 말합니다.
+- 항상 2~3문장
+- 질문은 1개만
+- 차분하고 시니어에게 부담 없는 말투
 `;
 
 // ----------------------------
-// 수치 관련 유틸
+// 유틸
 // ----------------------------
 function extractNumeric(text = "") {
-  const match = text.match(/\d{2,3}/);
-  return match ? Number(match[0]) : null;
+  const m = text.match(/\d{2,3}/);
+  return m ? Number(m[0]) : null;
 }
 
-function hasAmbiguousWord(text = "") {
-  return /쯤|정도|약/.test(text);
+function isPositiveConfirm(text = "") {
+  return /^(맞아|네|예|그래)$/i.test(text.trim());
+}
+
+function isNegativeConfirm(text = "") {
+  return /^(아니야|아니|틀려|다시)$/i.test(text.trim());
 }
 
 function isDangerQuestion(text = "") {
   return /위험|괜찮은|큰일|문제/.test(text);
-}
-
-function isPositiveConfirm(text = "") {
-  return /^(응|맞아|그래|예|네)$/i.test(text.trim());
 }
 
 // ----------------------------
@@ -65,99 +64,89 @@ function isPositiveConfirm(text = "") {
 // ----------------------------
 module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") {
-    for (const key in CORS_HEADERS) {
-      res.setHeader(key, CORS_HEADERS[key]);
-    }
+    for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
     return res.status(200).end();
   }
 
   if (req.method !== "POST") {
-    return sendResponse(res, 405, { error: "POST 요청만 허용됩니다." });
+    return sendResponse(res, 405, { error: "POST only" });
   }
 
-  const { message, messages: clientMessages = [] } = req.body || {};
+  const { message = "", messages: clientMessages = [] } = req.body || {};
   if (!message && clientMessages.length === 0) {
-    return sendResponse(res, 400, { error: "메시지가 없습니다." });
+    return sendResponse(res, 400, { error: "메시지 없음" });
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    return sendResponse(res, 500, { error: "OPENAI_API_KEY가 없습니다." });
+    return sendResponse(res, 500, { error: "API KEY 없음" });
   }
 
-  const text = message || "";
+  const text = message.trim();
   const currentNumeric = extractNumeric(text);
 
   // ----------------------------
-  // 🔒 재확인 상태 판단
+  // 상태 판단
   // ----------------------------
-  const lastAssistant = [...clientMessages].reverse().find(
-    (m) => m.role === "assistant"
-  );
-
+  const lastAssistant = [...clientMessages].reverse().find(m => m.role === "assistant");
   const awaitingConfirm =
-    lastAssistant && /맞는지.*확인/.test(lastAssistant.content || "");
+    lastAssistant && /제가 이렇게 들었어요/.test(lastAssistant.content || "");
 
   // ----------------------------
-  // STEP A: 재확인 응답 처리
+  // STEP 1️⃣ 숫자 확인 응답 처리
   // ----------------------------
   if (awaitingConfirm) {
-    if (currentNumeric !== null) {
-      // 숫자를 다시 말해준 경우 → 재확인 종료
-    } else if (isPositiveConfirm(text)) {
-      // "응/맞아" → 재확인 종료
+    if (isPositiveConfirm(text)) {
+      // 확인 완료 → 다음 단계 진행
+    } else if (isNegativeConfirm(text) || extractNumeric(text) !== null) {
+      // 다시 숫자 입력 유도
+      return sendResponse(res, 200, {
+        reply:
+          "괜찮아요.\n" +
+          "숫자를 한 자리씩 천천히 말씀해 주세요.\n" +
+          "예를 들어 1, 4, 5 처럼요.",
+      });
     } else {
       return sendResponse(res, 200, {
-        reply: "숫자를 한 번만 다시 말씀해 주실 수 있을까요?",
+        reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
       });
     }
-    // 재확인 끝 → 아래 정상 흐름으로 진행
   }
 
   // ----------------------------
-  // STEP 0: 애매한 수치 → 재확인 질문
+  // STEP 2️⃣ 새 숫자 인식 → 눈으로 확인
   // ----------------------------
   if (currentNumeric !== null && !awaitingConfirm) {
-    if (hasAmbiguousWord(text)) {
-      return sendResponse(res, 200, {
-        reply: `혹시 제가 잘못 들었을 수도 있어서요.
-${currentNumeric}가 맞는지 한 번만 확인해도 될까요?`,
-      });
-    }
+    return sendResponse(res, 200, {
+      reply:
+        `제가 이렇게 들었어요: ${currentNumeric}\n` +
+        "맞으면 '맞아'라고 말씀해 주시고,\n" +
+        "아니면 숫자를 다시 말씀해 주세요.",
+    });
   }
 
   // ----------------------------
   // 불안 질문 분기
   // ----------------------------
-  let extraSystemRule = "";
+  let extraRule = "";
   if (isDangerQuestion(text)) {
-    extraSystemRule = `
-추가 규칙(불안 대응):
-- 먼저 공감합니다.
-- 위험/안전으로 단정하지 않습니다.
-- 숫자 하나보다 변화와 흐름을 강조합니다.
-- 마지막에는 "같이 정리해드릴게요. 지금은 혼자 판단하려고 애쓰지 않으셔도 괜찮아요." 톤을 유지합니다.
+    extraRule = `
+추가 규칙:
+- 먼저 공감
+- 위험/안전 단정 금지
+- 변화와 흐름 강조
+- "같이 정리해드릴게요" 톤 유지
 `;
   }
 
   // ----------------------------
-  // 🔥 핵심: 수치 대화에서는 히스토리 초기화
+  // 일반 대화 / 설명 단계
   // ----------------------------
-  const isNumericContext = currentNumeric !== null;
+  const messages = [
+    { role: "system", content: systemPrompt + extraRule },
+    ...clientMessages,
+    { role: "user", content: text },
+  ];
 
-  const messages = isNumericContext
-    ? [
-        { role: "system", content: systemPrompt + extraSystemRule },
-        { role: "user", content: text },
-      ]
-    : [
-        { role: "system", content: systemPrompt + extraSystemRule },
-        ...clientMessages,
-        ...(text ? [{ role: "user", content: text }] : []),
-      ];
-
-  // ----------------------------
-  // OpenAI 호출
-  // ----------------------------
   try {
     const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -174,27 +163,19 @@ ${currentNumeric}가 맞는지 한 번만 확인해도 될까요?`,
     });
 
     const data = await openaiRes.json();
-    if (!openaiRes.ok) {
-      return sendResponse(res, openaiRes.status, data);
-    }
-
     let reply = data.choices?.[0]?.message?.content || "";
 
-// ----------------------------
-// 🔒 수치 응답에서 감사/고마워요 제거 (강제 차단)
-// ----------------------------
-if (currentNumeric !== null) {
-  reply = reply.replace(
-    /^(혈당 수치에 대해 )?(말씀해 주셔서 )?(고마워요|감사합니다)[.!]?(\s*)/i,
-    ""
-  );
-}
+    // 수치 설명 단계에서도 감사/고마워요 제거
+    if (currentNumeric !== null) {
+      reply = reply.replace(
+        /^(혈당|혈압)?( 수치에 대해)?( 말씀해 주셔서)?( 감사합니다| 고마워요)[.!]?\s*/i,
+        ""
+      );
+    }
 
-return sendResponse(res, 200, { reply });
-
+    return sendResponse(res, 200, { reply });
   } catch (err) {
-    return sendResponse(res, 500, {
-      error: err.message || "서버 오류",
-    });
+    return sendResponse(res, 500, { error: err.message || "서버 오류" });
   }
 };
+
