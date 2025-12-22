@@ -28,14 +28,6 @@ const systemPrompt = `
 `;
 
 // ----------------------------
-// 유틸
-// ----------------------------
-function extractNumeric(text = "") {
-  const m = String(text).match(/\d{2,3}/);
-  return m ? Number(m[0]) : null;
-}
-
-// ----------------------------
 // OpenAI
 // ----------------------------
 async function callOpenAI(messages) {
@@ -65,33 +57,27 @@ module.exports = async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const { message = "", pendingNumericConfirm = false, heardNumber = null, mode = "" } =
-    req.body || {};
+  const {
+    messageType = "",
+    message = "",
+    pendingNumericConfirm = false,
+    heardNumber = null,
+    confirmAction = null,
+    mode = "",
+  } = req.body || {};
 
   if (!process.env.OPENAI_API_KEY) {
     return sendResponse(res, 500, { error: "API KEY 없음" });
   }
 
-  const text = String(message).trim();
-  const currentNumeric = extractNumeric(text);
-
-  // 1️⃣ 숫자 말함 → 무조건 확인
-  if (!pendingNumericConfirm && currentNumeric !== null) {
-    return sendResponse(res, 200, {
-      reply:
-        `제가 이렇게 들었어요: ${currentNumeric}\n` +
-        "맞으면 '맞아'라고 말씀해 주시고, 아니면 숫자를 다시 말씀해 주세요.",
-      needConfirm: true,
-      heardNumber: currentNumeric,
-    });
-  }
-
-  // 2️⃣ 확인 단계
-  if (pendingNumericConfirm) {
-    if (text === "맞아") {
+  // ============================
+  // 🔴 1️⃣ 숫자 확인 결과 분기
+  // ============================
+  if (messageType === "numericConfirm") {
+    if (confirmAction === "yes") {
       if (!Number.isFinite(heardNumber)) {
         return sendResponse(res, 200, {
-          reply: "숫자를 한 번만 다시 말씀해 주실 수 있을까요?",
+          reply: "숫자를 다시 한 번만 말씀해 주실 수 있을까요?",
           needConfirm: true,
           heardNumber: null,
         });
@@ -104,28 +90,19 @@ module.exports = async function handler(req, res) {
           content:
             mode === "health"
               ? `공복 혈당 수치 ${heardNumber}에 대해, 한 번의 수치로 단정하지 말고 2~3문장으로 설명해 주세요. 마지막에 질문 1개만 해 주세요.`
-              : `수치 ${heardNumber}에 대해, 단정하지 말고 2~3문장으로 설명해 주세요.`,
+              : `수치 ${heardNumber}에 대해 단정하지 말고 2~3문장으로 설명해 주세요.`,
         },
       ];
 
       const reply = await callOpenAI(prompt);
-      return sendResponse(res, 200, { reply, needConfirm: false, heardNumber: null });
+      return sendResponse(res, 200, {
+        reply,
+        needConfirm: false,
+        heardNumber: null,
+      });
     }
 
-    // 아니야 / 기타
-    return sendResponse(res, 200, {
-      reply:
-        "괜찮아요.\n숫자를 한 자리씩 천천히 말씀해 주세요.\n예를 들어 1, 4, 5 처럼요.",
-      needConfirm: true,
-      heardNumber: null,
-    });
-  }
-
-  // 3️⃣ 일반 대화
-  const reply = await callOpenAI([
-    { role: "system", content: systemPrompt },
-    { role: "user", content: text },
-  ]);
-
-  return sendResponse(res, 200, { reply });
-};
+    if (confirmAction === "no") {
+      return sendResponse(res, 200, {
+        reply:
+          "괜찮아요.\n숫자를 한 자리씩 천천히 말씀해
