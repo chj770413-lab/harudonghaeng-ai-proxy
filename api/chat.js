@@ -1,3 +1,5 @@
+import axios from "axios";
+
 // ----------------------------
 // CORS
 // ----------------------------
@@ -28,30 +30,42 @@ const systemPrompt = `
 `;
 
 // ----------------------------
-// OpenAI
+// OpenAI (axios 안정 버전)
 // ----------------------------
 async function callOpenAI(messages) {
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.4,
-      max_tokens: 300,
-      messages,
-    }),
-  });
-  const data = await r.json();
-  return data.choices?.[0]?.message?.content || "";
+  try {
+    const r = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        temperature: 0.4,
+        max_tokens: 300,
+        messages,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 8000, // ⏱️ Vercel 안정 타임아웃
+      }
+    );
+
+    return r.data.choices?.[0]?.message?.content || null;
+  } catch (e) {
+    console.error(
+      "OpenAI axios error:",
+      e.response?.status,
+      e.response?.data || e.message
+    );
+    return null;
+  }
 }
 
 // ----------------------------
 // handler
 // ----------------------------
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
     return res.status(200).end();
@@ -95,6 +109,17 @@ module.exports = async function handler(req, res) {
       ];
 
       const reply = await callOpenAI(prompt);
+
+      if (!reply) {
+        return sendResponse(res, 200, {
+          reply:
+            "설명을 준비하는 데 잠시 시간이 걸리고 있어요.\n" +
+            "조금 후에 다시 한 번 말씀해 주실 수 있을까요?",
+          needConfirm: false,
+          heardNumber: null,
+        });
+      }
+
       return sendResponse(res, 200, {
         reply,
         needConfirm: false,
@@ -105,4 +130,29 @@ module.exports = async function handler(req, res) {
     if (confirmAction === "no") {
       return sendResponse(res, 200, {
         reply:
-          "괜찮아요.\n숫자를 한 자리씩 천천히 말씀해
+          "괜찮아요.\n숫자를 한 자리씩 천천히 말씀해 주세요.\n예를 들어 1, 4, 5 처럼요.",
+        needConfirm: true,
+        heardNumber: null,
+      });
+    }
+  }
+
+  // ============================
+  // 🔵 2️⃣ 일반 대화
+  // ============================
+  const reply = await callOpenAI([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: String(message).trim() },
+  ]);
+
+  if (!reply) {
+    return sendResponse(res, 200, {
+      reply:
+        "지금 잠시 응답이 늦어지고 있어요.\n" +
+        "조금 후에 다시 말씀해 주시면 이어서 도와드릴게요.",
+    });
+  }
+
+  return sendResponse(res, 200, { reply });
+}
+
