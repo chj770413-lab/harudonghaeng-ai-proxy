@@ -9,7 +9,7 @@ const CORS_HEADERS = {
 
 function sendResponse(res, status, body) {
   res.status(status);
-  for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
   res.json(body);
 }
 
@@ -17,33 +17,38 @@ function sendResponse(res, status, body) {
 // SYSTEM PROMPT
 // ----------------------------
 const systemPrompt = `
-당신은 '하루동행'이라는 시니어 건강 도우미입니다.
-말을 잘 듣고 핵심만 정리해 주는 간호사입니다.
-
-원칙:
-- 수치 하나로 판단하지 않습니다.
-- 불안을 키우지 않습니다.
-- 2~3문장으로 답합니다.
-- 질문은 1개만 합니다.
-- 수치 응답에 감사 인사는 사용하지 않습니다.
+당신은 '하루동행' 시니어 건강 도우미입니다.
+간호사처럼 차분하고 단정하지 않습니다.
+수치 하나만으로 판단하지 않습니다.
+항상 2~3문장, 질문은 1개만 합니다.
 `;
 
 // ----------------------------
-// Utils
+// 유틸
 // ----------------------------
 function extractNumeric(text = "") {
   const m = String(text).match(/\d{2,3}/);
   return m ? Number(m[0]) : null;
 }
 
-function stripThanks(text = "") {
-  return text.replace(/^(감사합니다|고마워요)[.!]?\s*/i, "");
+function stripThanks(t = "") {
+  return t.replace(/감사합니다|고마워요/g, "");
+}
+
+function isYes(t = "") {
+  return /^(맞아|네|예)$/i.test(t.trim());
+}
+function isNo(t = "") {
+  return /^(아니야|아니|틀려)$/i.test(t.trim());
+}
+function isLoose(t = "") {
+  return /(응\s*맞아|응|맞는\s*것\s*같아)/i.test(t.trim());
 }
 
 // ----------------------------
 // OpenAI
 // ----------------------------
-async function callLLM(messages) {
+async function callOpenAI(messages) {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -62,13 +67,11 @@ async function callLLM(messages) {
 }
 
 // ----------------------------
-// Handler
+// handler
 // ----------------------------
 module.exports = async function handler(req, res) {
-  if (req.method === "OPTIONS") {
-    for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return sendResponse(res, 405, { error: "POST only" });
 
   const {
     message = "",
@@ -76,50 +79,51 @@ module.exports = async function handler(req, res) {
     heardNumber = null,
   } = req.body || {};
 
-  const text = String(message).trim();
-  const numeric = extractNumeric(text);
+  const text = message.trim();
+  const num = extractNumeric(text);
 
   // ----------------------------
-  // 🔒 1) 확인 단계 (LLM 절대 호출 금지)
+  // 1️⃣ 확인 단계
   // ----------------------------
   if (pendingNumericConfirm === true) {
-    if (text === "맞아") {
+    if (isLoose(text)) {
+      return sendResponse(res, 200, {
+        reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
+        needConfirm: true,
+        heardNumber,
+      });
+    }
+
+    if (isNo(text)) {
+      return sendResponse(res, 200, {
+        reply: "숫자를 다시 한 자리씩 말씀해 주세요. 예: 1, 4, 5",
+        needConfirm: true,
+        heardNumber: null,
+      });
+    }
+
+    if (isYes(text)) {
       if (!Number.isFinite(heardNumber)) {
         return sendResponse(res, 200, {
-          reply: "숫자를 다시 한 번만 말씀해 주세요.",
+          reply: "숫자를 한 번만 다시 말씀해 주세요.",
           needConfirm: true,
           heardNumber: null,
         });
       }
 
-      const userReq = `공복 혈당 ${heardNumber}에 대해 한 번의 수치로 단정하지 말고 2~3문장으로 설명해 주세요. 마지막에 질문 1개만 해 주세요.`;
-      const reply = await callLLM([
+      const userPrompt =
+        `공복 혈당 ${heardNumber}에 대해 ` +
+        `한 번의 수치로 단정하지 말고 2~3문장으로 설명하고 질문 1개만 해 주세요.`;
+
+      const reply = await callOpenAI([
         { role: "system", content: systemPrompt },
-        { role: "user", content: userReq },
+        { role: "user", content: userPrompt },
       ]);
 
       return sendResponse(res, 200, {
         reply: stripThanks(reply),
         needConfirm: false,
         heardNumber: null,
-      });
-    }
-
-    if (text === "아니야") {
-      return sendResponse(res, 200, {
-        reply: "괜찮아요. 숫자를 다시 한 자리씩 천천히 말씀해 주세요.",
-        needConfirm: true,
-        heardNumber: null,
-      });
-    }
-
-    if (numeric !== null) {
-      return sendResponse(res, 200, {
-        reply:
-          `제가 이렇게 들었어요: ${numeric}\n` +
-          "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
-        needConfirm: true,
-        heardNumber: numeric,
       });
     }
 
@@ -131,25 +135,29 @@ module.exports = async function handler(req, res) {
   }
 
   // ----------------------------
-  // 2) 새 숫자 → 확인 시작
+  // 2️⃣ 숫자 들어오면 확인 단계 진입
   // ----------------------------
-  if (numeric !== null) {
+  if (num !== null) {
     return sendResponse(res, 200, {
       reply:
-        `제가 이렇게 들었어요: ${numeric}\n` +
+        `제가 이렇게 들었어요: ${num}\n` +
         "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
       needConfirm: true,
-      heardNumber: numeric,
+      heardNumber: num,
     });
   }
 
   // ----------------------------
-  // 3) 일반 대화
+  // 3️⃣ 일반 대화
   // ----------------------------
-  const reply = await callLLM([
+  const reply = await callOpenAI([
     { role: "system", content: systemPrompt },
     { role: "user", content: text },
   ]);
 
-  return sendResponse(res, 200, { reply: stripThanks(reply) });
+  return sendResponse(res, 200, {
+    reply: stripThanks(reply),
+    needConfirm: false,
+    heardNumber: null,
+  });
 };
