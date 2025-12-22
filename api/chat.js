@@ -141,39 +141,47 @@ module.exports = async function handler(req, res) {
     lastAssistant && /제가 이렇게 들었어요/.test(lastAssistant.content || "");
 
   // ----------------------------
-  // STEP 1️⃣ 숫자 확인 응답 처리
-  // ----------------------------
-  if (awaitingConfirm) {
-    // 1-1) 확인 완료
-    if (isPositiveConfirm(text)) {
-      const confirmedNumber = extractNumeric(lastAssistant.content);
-      const synthesizedUserMessage =
-        confirmedNumber !== null
-          ? `확인된 수치는 ${confirmedNumber}입니다.`
-          : "확인이 완료되었습니다.";
+// STEP 1️⃣ 숫자 확인 응답 처리 (수정본)
+// ----------------------------
+if (awaitingConfirm) {
+  // 1-1) 확인 완료 ("맞아")
+  if (isPositiveConfirm(text)) {
+    const confirmedNumber = extractNumeric(lastAssistant.content);
 
-      return proceedToExplanation({
-        res,
-        clientMessages,
-        userText: synthesizedUserMessage,
-      });
-    }
+    // ⚠️ 핵심: 설명을 명시적으로 요청하는 문장으로 재시작
+    const explanationRequest =
+      confirmedNumber !== null
+        ? `혈당 수치 ${confirmedNumber}에 대해 설명해 주세요.`
+        : "확인된 수치에 대해 설명해 주세요.";
 
-    // 1-2) 수정 요청
-    if (isNegativeConfirm(text) || currentNumeric !== null) {
-      return sendResponse(res, 200, {
-        reply:
-          "괜찮아요.\n" +
-          "숫자를 한 자리씩 천천히 말씀해 주세요.\n" +
-          "예를 들어 1, 4, 5 처럼요.",
-      });
-    }
+    // ⚠️ 핵심: 이전 assistant 질문 컨텍스트 제거
+    const cleanedMessages = clientMessages.filter(
+      m => !/제가 이렇게 들었어요/.test(m.content || "")
+    );
 
-    // 1-3) 애매한 응답
-    return sendResponse(res, 200, {
-      reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
+    return proceedToExplanation({
+      res,
+      clientMessages: cleanedMessages,
+      userText: explanationRequest,
     });
   }
+
+  // 1-2) 수정 요청
+  if (isNegativeConfirm(text) || currentNumeric !== null) {
+    return sendResponse(res, 200, {
+      reply:
+        "괜찮아요.\n" +
+        "숫자를 한 자리씩 천천히 말씀해 주세요.\n" +
+        "예를 들어 1, 4, 5 처럼요.",
+    });
+  }
+
+  // 1-3) 애매한 응답
+  return sendResponse(res, 200, {
+    reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
+  });
+}
+
 
   // ----------------------------
   // STEP 2️⃣ 새 숫자 인식 → 눈으로 확인
