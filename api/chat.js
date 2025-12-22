@@ -46,7 +46,11 @@ function extractNumeric(text = "") {
 }
 
 function isPositiveConfirm(text = "") {
-  return /^(맞아|네|예|그래)$/i.test(text.trim());
+  return /^(맞아|네|예)$/i.test(text.trim());
+}
+
+function isLooseConfirm(text = "") {
+  return /(응|맞다|맞는 것 같아)/i.test(text);
 }
 
 function isNegativeConfirm(text = "") {
