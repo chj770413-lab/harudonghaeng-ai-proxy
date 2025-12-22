@@ -13,7 +13,7 @@ const CORS_HEADERS = {
 function sendResponse(res, status, body) {
   res.status(status);
   for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
-  res.status(status).json(body);
+  res.json(body);
 }
 
 // ----------------------------
@@ -45,49 +45,46 @@ function extractNumeric(text = "") {
   return m ? Number(m[0]) : null;
 }
 
+// ✅ 확인 단계에서 "정확 키워드"만 인정
 function isPositiveConfirm(text = "") {
   return /^(맞아|네|예)$/i.test(text.trim());
 }
-
-function isLooseConfirm(text = "") {
-  return /(응|맞다|맞는 것 같아)/i.test(text);
-}
-
 function isNegativeConfirm(text = "") {
   return /^(아니야|아니|틀려|다시)$/i.test(text.trim());
+}
+
+// ❌ "응 맞아", "맞는 것 같아" 같은 느슨한 동의는 차단
+function isLooseConfirm(text = "") {
+  return /(응\s*맞아|맞는\s*것\s*같아|맞다|그런\s*것\s*같아)/i.test(text.trim());
 }
 
 function isDangerQuestion(text = "") {
   return /위험|괜찮은|큰일|문제/.test(text);
 }
 
-// clientMessages에서 과거 수치 추출 (assistant/user 모두 허용)
+// 과거 수치 추출 (대화 내에서)
 function extractHistoryNumerics(messages = []) {
   return messages
-    .map(m => extractNumeric(m.content))
-    .filter(v => v !== null);
+    .map((m) => extractNumeric(m.content))
+    .filter((v) => v !== null);
 }
 
-// 패턴 요약 여부 판단 (3개 이상)
 function hasPattern(values = []) {
   return values.length >= 3;
 }
 
-// ----------------------------
-// 설명 단계 공통 처리
-// ----------------------------
-async function proceedToExplanation({
-  res,
-  clientMessages,
-  userText,
-  extraRule = "",
-}) {
-  const messages = [
-    { role: "system", content: systemPrompt + extraRule },
-    ...clientMessages,
-    { role: "user", content: userText },
-  ];
+// 수치 컨텍스트에서 감사/고마워요 제거 (강제)
+function stripThanks(reply = "") {
+  return reply.replace(
+    /^(혈당|혈압)?( 수치에 대해)?( 말씀해 주셔서)?\s*(감사합니다|고마워요)[.!]?\s*/i,
+    ""
+  );
+}
 
+// ----------------------------
+// OpenAI 호출 공통
+// ----------------------------
+async function callOpenAI({ messages }) {
   const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -103,13 +100,33 @@ async function proceedToExplanation({
   });
 
   const data = await openaiRes.json();
-  let reply = data.choices?.[0]?.message?.content || "";
+  if (!openaiRes.ok) {
+    return { ok: false, status: openaiRes.status, data };
+  }
+  return { ok: true, data };
+}
 
-  // 수치 컨텍스트에서는 감사/고마워요 제거
-  reply = reply.replace(
-    /^(혈당|혈압)?( 수치에 대해)?( 말씀해 주셔서)?( 감사합니다| 고마워요)[.!]?\s*/i,
-    ""
-  );
+// ----------------------------
+// 설명 단계 공통 처리
+// ----------------------------
+async function proceedToExplanation({
+  res,
+  clientMessages,
+  userText,
+  extraRule = "",
+  numericContext = false,
+}) {
+  const messages = [
+    { role: "system", content: systemPrompt + extraRule },
+    ...clientMessages,
+    { role: "user", content: userText },
+  ];
+
+  const result = await callOpenAI({ messages });
+  if (!result.ok) return sendResponse(res, result.status, result.data);
+
+  let reply = result.data.choices?.[0]?.message?.content || "";
+  if (numericContext) reply = stripThanks(reply);
 
   return sendResponse(res, 200, { reply });
 }
@@ -122,6 +139,7 @@ module.exports = async function handler(req, res) {
     for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
     return res.status(200).end();
   }
+
   if (req.method !== "POST") {
     return sendResponse(res, 405, { error: "POST only" });
   }
@@ -130,6 +148,7 @@ module.exports = async function handler(req, res) {
   if (!message && clientMessages.length === 0) {
     return sendResponse(res, 400, { error: "메시지 없음" });
   }
+
   if (!process.env.OPENAI_API_KEY) {
     return sendResponse(res, 500, { error: "API KEY 없음" });
   }
@@ -138,63 +157,63 @@ module.exports = async function handler(req, res) {
   const currentNumeric = extractNumeric(text);
 
   // ----------------------------
-  // 상태 판단
+  // 상태 판단: 직전 assistant가 숫자 확인 문구를 냈으면 확인 단계
   // ----------------------------
-  const lastAssistant = [...clientMessages].reverse().find(m => m.role === "assistant");
+  const lastAssistant = [...clientMessages].reverse().find((m) => m.role === "assistant");
   const awaitingConfirm =
-    lastAssistant && /제가 이렇게 들었어요/.test(lastAssistant.content || "");
+    lastAssistant && /제가 이렇게 들었어요:\s*\d+/.test(lastAssistant.content || "");
 
   // ----------------------------
-// STEP 1️⃣ 숫자 확인 응답 처리 (수정본)
-// ----------------------------
-  // ❗ 확인 단계에서는 느슨한 공감 발화 차단
-if (awaitingConfirm && isLooseConfirm(text)) {
-  return sendResponse(res, 200, {
-    reply:
-      "확인을 위해서요.\n" +
-      "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
-  });
-}
+  // STEP 1️⃣ 숫자 확인 응답 처리
+  // ----------------------------
+  if (awaitingConfirm) {
+    // 1-0) 느슨한 동의(응 맞아 등) 차단
+    if (isLooseConfirm(text)) {
+      return sendResponse(res, 200, {
+        reply:
+          "확인을 위해서요.\n" +
+          "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
+      });
+    }
 
-if (awaitingConfirm) {
-  // 1-1) 확인 완료 ("맞아")
-  if (isPositiveConfirm(text)) {
-    const confirmedNumber = extractNumeric(lastAssistant.content);
+    // 1-1) 확인 완료 ("맞아/네/예")
+    if (isPositiveConfirm(text)) {
+      const confirmedNumber = extractNumeric(lastAssistant.content);
 
-    // ⚠️ 핵심: 설명을 명시적으로 요청하는 문장으로 재시작
-    const explanationRequest =
-      confirmedNumber !== null
-        ? `혈당 수치 ${confirmedNumber}에 대해 설명해 주세요.`
-        : "확인된 수치에 대해 설명해 주세요.";
+      // ✅ 핵심: '맞아'를 AI에 넘기지 않고, 설명 요청 문장으로 전환
+      const explanationRequest =
+        confirmedNumber !== null
+          ? `혈당 수치 ${confirmedNumber}에 대해, 한 번의 수치로 단정하지 말고 2~3문장으로 설명해 주세요. 마지막에 질문 1개만 해 주세요.`
+          : "확인된 수치에 대해, 단정하지 말고 2~3문장으로 설명해 주세요. 마지막에 질문 1개만 해 주세요.";
 
-    // ⚠️ 핵심: 이전 assistant 질문 컨텍스트 제거
-    const cleanedMessages = clientMessages.filter(
-      m => !/제가 이렇게 들었어요/.test(m.content || "")
-    );
+      // ✅ 핵심: 숫자 확인용 assistant 메시지는 히스토리에서 제거(말투 오염/문맥 혼선 방지)
+      const cleanedMessages = clientMessages.filter(
+        (m) => !/제가 이렇게 들었어요:\s*\d+/.test(m.content || "")
+      );
 
-    return proceedToExplanation({
-      res,
-      clientMessages: cleanedMessages,
-      userText: explanationRequest,
-    });
-  }
+      return proceedToExplanation({
+        res,
+        clientMessages: cleanedMessages,
+        userText: explanationRequest,
+        numericContext: true,
+      });
+    }
 
-  // 1-2) 수정 요청
-  if (isNegativeConfirm(text) || currentNumeric !== null) {
+    // 1-2) 수정 요청 ("아니야/아니/틀려/다시" 또는 숫자 재입력)
+    if (isNegativeConfirm(text) || currentNumeric !== null) {
+      return sendResponse(res, 200, {
+        reply:
+          "괜찮아요.\n" +
+          "숫자를 한 자리씩 천천히 말씀해 주세요.\n" +
+          "예를 들어 1, 4, 5 처럼요.",
+      });
+    }
+
+    // 1-3) 애매한 응답
     return sendResponse(res, 200, {
-      reply:
-        "괜찮아요.\n" +
-        "숫자를 한 자리씩 천천히 말씀해 주세요.\n" +
-        "예를 들어 1, 4, 5 처럼요.",
+      reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
     });
   }
-
-  // 1-3) 애매한 응답
-  return sendResponse(res, 200, {
-    reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
-  });
-}
-
 
   // ----------------------------
   // STEP 2️⃣ 새 숫자 인식 → 눈으로 확인
@@ -209,22 +228,25 @@ if (awaitingConfirm) {
   }
 
   // ----------------------------
-  // STEP 3️⃣ 패턴 요약 분기
+  // STEP 3️⃣ 패턴 요약 (대화 내 수치 3개 이상)
   // ----------------------------
   const historyValues = extractHistoryNumerics(clientMessages);
   if (hasPattern(historyValues)) {
     const patternRule = `
 추가 규칙(패턴 요약):
-- 여러 수치를 종합해 흐름만 요약합니다.
+- 여러 수치를 종합해 "흐름"만 요약합니다.
 - 평균/정상/위험 같은 단정은 하지 않습니다.
 - "최근 기록을 보면", "며칠간의 흐름을 보면" 같은 표현을 사용합니다.
 - 다음 행동은 선택지로 제안합니다.
 `;
+
+    // ✅ 패턴 요약도 숫자 컨텍스트이므로 히스토리 오염 줄이기 위해 질문 문장을 명확히 줌
     return proceedToExplanation({
       res,
       clientMessages,
-      userText: "최근 수치 흐름을 요약해 주세요.",
+      userText: "최근 수치 흐름을 2~3문장으로 요약하고, 마지막에 질문 1개만 해 주세요.",
       extraRule: patternRule,
+      numericContext: true,
     });
   }
 
@@ -243,12 +265,13 @@ if (awaitingConfirm) {
   }
 
   // ----------------------------
-  // STEP 4️⃣ 일반 설명
+  // STEP 4️⃣ 일반 대화
   // ----------------------------
   return proceedToExplanation({
     res,
     clientMessages,
     userText: text,
     extraRule,
+    numericContext: false,
   });
 };
