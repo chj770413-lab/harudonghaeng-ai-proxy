@@ -178,9 +178,20 @@ ${currentNumeric}가 맞는지 한 번만 확인해도 될까요?`,
       return sendResponse(res, openaiRes.status, data);
     }
 
-    return sendResponse(res, 200, {
-      reply: data.choices?.[0]?.message?.content || "",
-    });
+    let reply = data.choices?.[0]?.message?.content || "";
+
+// ----------------------------
+// 🔒 수치 응답에서 감사/고마워요 제거 (강제 차단)
+// ----------------------------
+if (currentNumeric !== null) {
+  reply = reply.replace(
+    /^(혈당 수치에 대해 )?(말씀해 주셔서 )?(고마워요|감사합니다)[.!]?(\s*)/i,
+    ""
+  );
+}
+
+return sendResponse(res, 200, { reply });
+
   } catch (err) {
     return sendResponse(res, 500, {
       error: err.message || "서버 오류",
