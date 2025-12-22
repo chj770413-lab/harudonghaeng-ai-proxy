@@ -19,7 +19,7 @@ function sendResponse(res, status, body) {
 }
 
 // ----------------------------
-// 하루동행 SYSTEM PROMPT (최종 고정)
+// 하루동행 SYSTEM PROMPT (최종 고정본)
 // ----------------------------
 const systemPrompt = `
 당신은 '하루동행'이라는 시니어 건강 도우미입니다.
@@ -32,7 +32,6 @@ const systemPrompt = `
 - 조언보다는 관찰과 기록을 중심으로 안내합니다.
 - 병원이나 의사 언급은 필요 조건이 충족될 때만 합니다.
 - 수치나 정보가 주어졌을 때는 "감사합니다", "고마워요" 같은 인사로 시작하지 않습니다.
-
 
 응답 방식:
 - 항상 2~3문장으로 응답합니다.
@@ -85,44 +84,40 @@ module.exports = async function handler(req, res) {
     return sendResponse(res, 500, { error: "OPENAI_API_KEY가 없습니다." });
   }
 
+  const text = message || "";
+  const currentNumeric = extractNumeric(text);
+
   // ----------------------------
   // 🔒 재확인 상태 판단
   // ----------------------------
-  const lastAssistant = [...clientMessages].reverse().find(m => m.role === "assistant");
-  const awaitingConfirm =
-    lastAssistant &&
-    /맞는지.*확인/.test(lastAssistant.content || "");
+  const lastAssistant = [...clientMessages].reverse().find(
+    (m) => m.role === "assistant"
+  );
 
-  const currentNumeric = extractNumeric(message || "");
+  const awaitingConfirm =
+    lastAssistant && /맞는지.*확인/.test(lastAssistant.content || "");
 
   // ----------------------------
-  // STEP A: 재확인 응답 처리 (최우선)
+  // STEP A: 재확인 응답 처리
   // ----------------------------
   if (awaitingConfirm) {
-    // 사용자가 숫자를 다시 말해준 경우
     if (currentNumeric !== null) {
-      // 재확인 종료 → 정상 흐름으로 넘어감
-      // (아래 AI 호출로 진행)
-    }
-    // "응 / 맞아" 같은 긍정 응답
-    else if (isPositiveConfirm(message || "")) {
-      // 숫자는 직전 assistant 질문에 있던 숫자를 그대로 인정
-      // 재확인 종료 → 정상 흐름으로 넘어감
-    }
-    // 그 외 애매한 답
-    else {
+      // 숫자를 다시 말해준 경우 → 재확인 종료
+    } else if (isPositiveConfirm(text)) {
+      // "응/맞아" → 재확인 종료
+    } else {
       return sendResponse(res, 200, {
         reply: "숫자를 한 번만 다시 말씀해 주실 수 있을까요?",
       });
     }
-    // 여기로 내려오면 재확인 단계는 종료
+    // 재확인 끝 → 아래 정상 흐름으로 진행
   }
 
   // ----------------------------
-  // STEP 0: 새 수치 등장 → 재확인 질문
+  // STEP 0: 애매한 수치 → 재확인 질문
   // ----------------------------
   if (currentNumeric !== null && !awaitingConfirm) {
-    if (hasAmbiguousWord(message || "")) {
+    if (hasAmbiguousWord(text)) {
       return sendResponse(res, 200, {
         reply: `혹시 제가 잘못 들었을 수도 있어서요.
 ${currentNumeric}가 맞는지 한 번만 확인해도 될까요?`,
@@ -134,7 +129,7 @@ ${currentNumeric}가 맞는지 한 번만 확인해도 될까요?`,
   // 불안 질문 분기
   // ----------------------------
   let extraSystemRule = "";
-  if (isDangerQuestion(message || "")) {
+  if (isDangerQuestion(text)) {
     extraSystemRule = `
 추가 규칙(불안 대응):
 - 먼저 공감합니다.
@@ -145,14 +140,24 @@ ${currentNumeric}가 맞는지 한 번만 확인해도 될까요?`,
   }
 
   // ----------------------------
+  // 🔥 핵심: 수치 대화에서는 히스토리 초기화
+  // ----------------------------
+  const isNumericContext = currentNumeric !== null;
+
+  const messages = isNumericContext
+    ? [
+        { role: "system", content: systemPrompt + extraSystemRule },
+        { role: "user", content: text },
+      ]
+    : [
+        { role: "system", content: systemPrompt + extraSystemRule },
+        ...clientMessages,
+        ...(text ? [{ role: "user", content: text }] : []),
+      ];
+
+  // ----------------------------
   // OpenAI 호출
   // ----------------------------
-  const messages = [
-    { role: "system", content: systemPrompt + extraSystemRule },
-    ...clientMessages,
-    ...(message ? [{ role: "user", content: message }] : []),
-  ];
-
   try {
     const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
