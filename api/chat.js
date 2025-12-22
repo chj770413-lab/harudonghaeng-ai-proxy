@@ -147,6 +147,15 @@ module.exports = async function handler(req, res) {
   // ----------------------------
 // STEP 1️⃣ 숫자 확인 응답 처리 (수정본)
 // ----------------------------
+  // ❗ 확인 단계에서는 느슨한 공감 발화 차단
+if (awaitingConfirm && isLooseConfirm(text)) {
+  return sendResponse(res, 200, {
+    reply:
+      "확인을 위해서요.\n" +
+      "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
+  });
+}
+
 if (awaitingConfirm) {
   // 1-1) 확인 완료 ("맞아")
   if (isPositiveConfirm(text)) {
