@@ -47,7 +47,7 @@ async function callOpenAI(messages) {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
-        timeout: 8000, // ⏱️ Vercel 안정 타임아웃
+        timeout: 8000,
       }
     );
 
@@ -63,9 +63,9 @@ async function callOpenAI(messages) {
 }
 
 // ----------------------------
-// handler
+// handler (🔥 여기 중요)
 // ----------------------------
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") {
     for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
     return res.status(200).end();
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
   }
 
   // ============================
-  // 🔴 1️⃣ 숫자 확인 결과 분기
+  // 🔴 숫자 확인 결과 분기
   // ============================
   if (messageType === "numericConfirm") {
     if (confirmAction === "yes") {
@@ -138,7 +138,7 @@ export default async function handler(req, res) {
   }
 
   // ============================
-  // 🔵 2️⃣ 일반 대화
+  // 🔵 일반 대화
   // ============================
   const reply = await callOpenAI([
     { role: "system", content: systemPrompt },
@@ -154,5 +154,4 @@ export default async function handler(req, res) {
   }
 
   return sendResponse(res, 200, { reply });
-}
-
+};
