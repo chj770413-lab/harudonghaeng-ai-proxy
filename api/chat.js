@@ -12,10 +12,8 @@ const CORS_HEADERS = {
 // ----------------------------
 function sendResponse(res, status, body) {
   res.status(status);
-  for (const key in CORS_HEADERS) {
-    res.setHeader(key, CORS_HEADERS[key]);
-  }
-  res.json(body);
+  for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
+  res.status(status).json(body);
 }
 
 // ----------------------------
@@ -59,6 +57,59 @@ function isDangerQuestion(text = "") {
   return /위험|괜찮은|큰일|문제/.test(text);
 }
 
+// clientMessages에서 과거 수치 추출 (assistant/user 모두 허용)
+function extractHistoryNumerics(messages = []) {
+  return messages
+    .map(m => extractNumeric(m.content))
+    .filter(v => v !== null);
+}
+
+// 패턴 요약 여부 판단 (3개 이상)
+function hasPattern(values = []) {
+  return values.length >= 3;
+}
+
+// ----------------------------
+// 설명 단계 공통 처리
+// ----------------------------
+async function proceedToExplanation({
+  res,
+  clientMessages,
+  userText,
+  extraRule = "",
+}) {
+  const messages = [
+    { role: "system", content: systemPrompt + extraRule },
+    ...clientMessages,
+    { role: "user", content: userText },
+  ];
+
+  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.4,
+      max_tokens: 300,
+      messages,
+    }),
+  });
+
+  const data = await openaiRes.json();
+  let reply = data.choices?.[0]?.message?.content || "";
+
+  // 수치 컨텍스트에서는 감사/고마워요 제거
+  reply = reply.replace(
+    /^(혈당|혈압)?( 수치에 대해)?( 말씀해 주셔서)?( 감사합니다| 고마워요)[.!]?\s*/i,
+    ""
+  );
+
+  return sendResponse(res, 200, { reply });
+}
+
 // ----------------------------
 // 메인 핸들러
 // ----------------------------
@@ -67,7 +118,6 @@ module.exports = async function handler(req, res) {
     for (const k in CORS_HEADERS) res.setHeader(k, CORS_HEADERS[k]);
     return res.status(200).end();
   }
-
   if (req.method !== "POST") {
     return sendResponse(res, 405, { error: "POST only" });
   }
@@ -76,7 +126,6 @@ module.exports = async function handler(req, res) {
   if (!message && clientMessages.length === 0) {
     return sendResponse(res, 400, { error: "메시지 없음" });
   }
-
   if (!process.env.OPENAI_API_KEY) {
     return sendResponse(res, 500, { error: "API KEY 없음" });
   }
@@ -95,21 +144,35 @@ module.exports = async function handler(req, res) {
   // STEP 1️⃣ 숫자 확인 응답 처리
   // ----------------------------
   if (awaitingConfirm) {
+    // 1-1) 확인 완료
     if (isPositiveConfirm(text)) {
-      // 확인 완료 → 다음 단계 진행
-    } else if (isNegativeConfirm(text) || extractNumeric(text) !== null) {
-      // 다시 숫자 입력 유도
+      const confirmedNumber = extractNumeric(lastAssistant.content);
+      const synthesizedUserMessage =
+        confirmedNumber !== null
+          ? `확인된 수치는 ${confirmedNumber}입니다.`
+          : "확인이 완료되었습니다.";
+
+      return proceedToExplanation({
+        res,
+        clientMessages,
+        userText: synthesizedUserMessage,
+      });
+    }
+
+    // 1-2) 수정 요청
+    if (isNegativeConfirm(text) || currentNumeric !== null) {
       return sendResponse(res, 200, {
         reply:
           "괜찮아요.\n" +
           "숫자를 한 자리씩 천천히 말씀해 주세요.\n" +
           "예를 들어 1, 4, 5 처럼요.",
       });
-    } else {
-      return sendResponse(res, 200, {
-        reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
-      });
     }
+
+    // 1-3) 애매한 응답
+    return sendResponse(res, 200, {
+      reply: "맞으면 '맞아', 아니면 '아니야'라고 말씀해 주세요.",
+    });
   }
 
   // ----------------------------
@@ -125,13 +188,33 @@ module.exports = async function handler(req, res) {
   }
 
   // ----------------------------
+  // STEP 3️⃣ 패턴 요약 분기
+  // ----------------------------
+  const historyValues = extractHistoryNumerics(clientMessages);
+  if (hasPattern(historyValues)) {
+    const patternRule = `
+추가 규칙(패턴 요약):
+- 여러 수치를 종합해 흐름만 요약합니다.
+- 평균/정상/위험 같은 단정은 하지 않습니다.
+- "최근 기록을 보면", "며칠간의 흐름을 보면" 같은 표현을 사용합니다.
+- 다음 행동은 선택지로 제안합니다.
+`;
+    return proceedToExplanation({
+      res,
+      clientMessages,
+      userText: "최근 수치 흐름을 요약해 주세요.",
+      extraRule: patternRule,
+    });
+  }
+
+  // ----------------------------
   // 불안 질문 분기
   // ----------------------------
   let extraRule = "";
   if (isDangerQuestion(text)) {
     extraRule = `
-추가 규칙:
-- 먼저 공감
+추가 규칙(불안 대응):
+- 먼저 공감합니다.
 - 위험/안전 단정 금지
 - 변화와 흐름 강조
 - "같이 정리해드릴게요" 톤 유지
@@ -139,43 +222,12 @@ module.exports = async function handler(req, res) {
   }
 
   // ----------------------------
-  // 일반 대화 / 설명 단계
+  // STEP 4️⃣ 일반 설명
   // ----------------------------
-  const messages = [
-    { role: "system", content: systemPrompt + extraRule },
-    ...clientMessages,
-    { role: "user", content: text },
-  ];
-
-  try {
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.4,
-        max_tokens: 300,
-        messages,
-      }),
-    });
-
-    const data = await openaiRes.json();
-    let reply = data.choices?.[0]?.message?.content || "";
-
-    // 수치 설명 단계에서도 감사/고마워요 제거
-    if (currentNumeric !== null) {
-      reply = reply.replace(
-        /^(혈당|혈압)?( 수치에 대해)?( 말씀해 주셔서)?( 감사합니다| 고마워요)[.!]?\s*/i,
-        ""
-      );
-    }
-
-    return sendResponse(res, 200, { reply });
-  } catch (err) {
-    return sendResponse(res, 500, { error: err.message || "서버 오류" });
-  }
+  return proceedToExplanation({
+    res,
+    clientMessages,
+    userText: text,
+    extraRule,
+  });
 };
-
