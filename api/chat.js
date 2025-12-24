@@ -115,14 +115,17 @@ module.exports = async function handler(req, res) {
       const reply = await callOpenAI(prompt);
 
       if (!reply) {
-        return sendResponse(res, 200, {
-          reply:
-            "설명을 준비하는 데 잠시 시간이 걸리고 있어요.\n" +
-            "조금 후에 다시 한 번 말씀해 주실 수 있을까요?",
-          needConfirm: false,
-          heardNumber: null,
-        });
-      }
+  return sendResponse(res, 200, {
+    reply:
+      "말씀해 주신 수치를 기준으로 지금 상태를 함께 살펴볼게요.\n" +
+      "한 번의 수치만으로 판단하기보다는 흐름을 같이 보는 게 중요해요.\n" +
+      "오늘 컨디션은 어떠셨나요?",
+    needConfirm: false,
+    heardNumber: null,
+    sessionFlow: "free",
+  });
+}
+
 
       return sendResponse(res, 200, {
         reply,
