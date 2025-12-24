@@ -1,3 +1,7 @@
+export const config = {
+  runtime: "nodejs",
+};
+
 const axios = require("axios");
 
 // ----------------------------
