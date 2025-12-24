@@ -78,10 +78,14 @@ module.exports = async function handler(req, res) {
     heardNumber = null,
     confirmAction = null,
     mode = "",
+    sessionFlow = "free", // 🔒 추가: free | numeric
   } = req.body || {};
 
   if (!process.env.OPENAI_API_KEY) {
-    return sendResponse(res, 500, { error: "API KEY 없음" });
+    // ❗ 사용자에게 오류 노출 금지: 항상 정상 응답
+    return sendResponse(res, 200, {
+      reply: "말씀해 주셔서 고마워요. 이어서 도와드릴게요.",
+    });
   }
 
   // ============================
