@@ -38,33 +38,30 @@ const systemPrompt = `
 // ----------------------------
 async function callOpenAI(messages) {
   try {
-    const r = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
         model: "gpt-4o-mini",
         temperature: 0.4,
         max_tokens: 300,
         messages,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 8000,
-      }
-    );
+      }),
+    });
 
-    return r.data.choices?.[0]?.message?.content || null;
+    if (!r.ok) return null;
+
+    const data = await r.json();
+    return data.choices?.[0]?.message?.content || null;
   } catch (e) {
-    console.error(
-      "OpenAI axios error:",
-      e.response?.status,
-      e.response?.data || e.message
-    );
+    console.error("OpenAI fetch error:", e);
     return null;
   }
 }
+
 
 // ----------------------------
 // handler (🔥 여기 중요)
