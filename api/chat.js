@@ -18,9 +18,22 @@ function send(res, status, body) {
 }
 
 // ----------------------------
-// SYSTEM PROMPT
+// SYSTEM PROMPTS (분리)
 // ----------------------------
-const systemPrompt = `
+
+// 🔵 일반 대화용
+const systemPromptGeneral = `
+당신은 '하루동행' 시니어 건강 도우미입니다.
+간호사처럼 차분하고 부드럽게 대화합니다.
+
+규칙:
+- 공감부터 시작합니다.
+- 숫자나 수치가 없으면 건강 수치를 단정하지 않습니다.
+- 필요할 때만 질문합니다.
+`;
+
+// 🔴 숫자 설명용
+const systemPromptNumeric = `
 당신은 '하루동행' 시니어 건강 도우미입니다.
 간호사처럼 차분하고 부드럽게 설명합니다.
 
@@ -41,7 +54,7 @@ function extractNumber(text = "") {
 }
 
 // ----------------------------
-// OpenAI 호출 (fetch 안정 버전)
+// OpenAI 호출
 // ----------------------------
 async function callOpenAI(messages) {
   try {
@@ -79,28 +92,28 @@ export default async function handler(req, res) {
   const { message = "", mode = "" } = req.body || {};
   const text = String(message).trim();
 
-  // API 키 없어도 사용자 UX는 유지
+  // API 키 없어도 UX 유지
   if (!process.env.OPENAI_API_KEY) {
     return send(res, 200, {
-      reply:
-        "말씀해 주신 내용을 기준으로 차분히 살펴볼게요. " +
-        "제가 잘못 이해했다면, 정확한 숫자를 다시 알려주세요.",
+      reply: "말씀해 주셔서 고마워요. 지금 느끼시는 부분을 조금 더 말씀해 주실 수 있을까요?",
     });
   }
 
   const num = extractNumber(text);
 
   // ============================
-  // 🔴 숫자 있으면 즉시 설명
+  // 🔴 숫자 있을 때
   // ============================
   if (num !== null) {
     const prompt = [
-      { role: "system", content: systemPrompt },
+      { role: "system", content: systemPromptNumeric },
       {
         role: "user",
         content:
           mode === "health"
-            ? `공복 혈당 수치 ${num}에 대해 설명해 주세요.`
+            ? `말씀해 주신 수치 ${num}에 대해 설명해 주세요. 
+               이 수치가 공복인지, 식후인지 단정하지 말고 
+               상황을 먼저 확인하는 말투로 답해 주세요.`
             : `말씀해 주신 수치 ${num}에 대해 설명해 주세요.`,
       },
     ];
@@ -116,17 +129,16 @@ export default async function handler(req, res) {
   }
 
   // ============================
-  // 🔵 숫자 없는 일반 대화
+  // 🔵 일반 대화
   // ============================
   const reply = await callOpenAI([
-    { role: "system", content: systemPrompt },
+    { role: "system", content: systemPromptGeneral },
     { role: "user", content: text },
   ]);
 
   return send(res, 200, {
     reply:
       reply ||
-      "말씀해 주셔서 고마워요. " +
-      "제가 잘못 이해했다면, 정확한 숫자를 다시 알려주세요.",
+      "말씀해 주셔서 고마워요. 지금 느끼시는 부분을 조금 더 말씀해 주실 수 있을까요?",
   });
 }
